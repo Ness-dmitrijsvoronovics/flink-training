@@ -21,6 +21,8 @@ package org.apache.flink.training.exercises.longrides;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -30,7 +32,6 @@ import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.training.exercises.common.datatypes.TaxiRide;
 import org.apache.flink.training.exercises.common.sources.TaxiRideGenerator;
-import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
 import org.apache.flink.util.Collector;
 
 import java.time.Duration;
@@ -47,7 +48,9 @@ public class LongRidesExercise {
     private final SourceFunction<TaxiRide> source;
     private final SinkFunction<Long> sink;
 
-    /** Creates a job using the source and sink provided. */
+    /**
+     * Creates a job using the source and sink provided.
+     */
     public LongRidesExercise(SourceFunction<TaxiRide> source, SinkFunction<Long> sink) {
         this.source = source;
         this.sink = sink;
@@ -98,17 +101,38 @@ public class LongRidesExercise {
     @VisibleForTesting
     public static class AlertFunction extends KeyedProcessFunction<Long, TaxiRide, Long> {
 
+        public static final long THRESHOLD = 120 * 60 * 1000L;
+        ValueState<TaxiRide> rideState;
+
         @Override
-        public void open(Configuration config) throws Exception {
-            throw new MissingSolutionException();
+        public void open(Configuration config) {
+            ValueStateDescriptor<TaxiRide> rideStateDescriptor =
+                    new ValueStateDescriptor<>("ride event", TaxiRide.class);
+            rideState = getRuntimeContext().getState(rideStateDescriptor);
         }
 
         @Override
-        public void processElement(TaxiRide ride, Context context, Collector<Long> out)
-                throws Exception {}
+        public void processElement(TaxiRide ride, Context context, Collector<Long> out) throws Exception {
+            if (rideState.value() == null) {
+                rideState.update(ride);
+                if (ride.isStart){
+                    context.timerService().registerEventTimeTimer(ride.getEventTimeMillis() + THRESHOLD);
+                }
+            } else {
+                if (Math.abs(ride.getEventTimeMillis() - rideState.value().getEventTimeMillis()) > THRESHOLD) {
+                    out.collect(ride.rideId);
+                }
+                if (!ride.isStart) { //timer was set only when start_ride_event received before end_ride_event
+                    context.timerService().deleteEventTimeTimer(rideState.value().getEventTimeMillis() + THRESHOLD);
+                }
+                rideState.clear();
+            }
+        }
 
         @Override
-        public void onTimer(long timestamp, OnTimerContext context, Collector<Long> out)
-                throws Exception {}
+        public void onTimer(long timestamp, OnTimerContext context, Collector<Long> out) throws Exception {
+            out.collect(rideState.value().rideId);
+            rideState.clear();
+        }
     }
 }
