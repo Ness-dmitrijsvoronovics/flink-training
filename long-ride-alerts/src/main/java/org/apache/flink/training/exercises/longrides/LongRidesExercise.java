@@ -101,8 +101,8 @@ public class LongRidesExercise {
     @VisibleForTesting
     public static class AlertFunction extends KeyedProcessFunction<Long, TaxiRide, Long> {
 
-        public static final long THRESHOLD = 120 * 60 * 1000L;
-        ValueState<TaxiRide> rideState;
+        private static final long  THRESHOLD = 120 * 60 * 1000L;
+        private transient ValueState<TaxiRide> rideState;
 
         @Override
         public void open(Configuration config) {
